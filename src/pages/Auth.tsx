@@ -15,11 +15,13 @@ type AuthStep = 'phone' | 'otp' | 'register';
 export default function Auth() {
   const [step, setStep] = useState<AuthStep>('phone');
   const [mobile, setMobile] = useState('');
+  const [countryCode, setCountryCode] = useState('+91');
   const [otp, setOtp] = useState('');
   const [fullName, setFullName] = useState('');
   const [selectedRole, setSelectedRole] = useState<AppRole>('seller');
   const [loading, setLoading] = useState(false);
-  const [isNewUser, setIsNewUser] = useState(false);
+  const [verifiedUserId, setVerifiedUserId] = useState<string | null>(null);
+  const [customerName, setCustomerName] = useState<string | null>(null);
   
   const { user, role, loading: authLoading } = useAuth();
   const navigate = useNavigate();
@@ -44,36 +46,29 @@ export default function Auth() {
 
     setLoading(true);
     try {
-      // Check if user exists
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('mobile', mobile)
-        .maybeSingle();
-
-      setIsNewUser(!existingProfile);
-
-      // For demo purposes, we'll use email-based auth with mobile as email
-      const email = `${mobile}@duebook.app`;
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: `${window.location.origin}/`,
-        },
+      const response = await supabase.functions.invoke('send-otp', {
+        body: { mobile, countryCode },
       });
 
-      if (error) throw error;
+      if (response.error) {
+        throw new Error(response.error.message || 'Failed to send OTP');
+      }
+
+      if (response.data?.error) {
+        throw new Error(response.data.error);
+      }
 
       toast({ 
         title: 'OTP Sent!', 
-        description: 'Check your email for the verification code (demo mode)' 
+        description: `Verification code sent to ${countryCode}${mobile}` 
       });
       setStep('otp');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('OTP Error:', error);
+      const message = error instanceof Error ? error.message : 'Failed to send OTP';
       toast({ 
         title: 'Failed to send OTP', 
-        description: error.message,
+        description: message,
         variant: 'destructive' 
       });
     } finally {
@@ -90,45 +85,49 @@ export default function Auth() {
 
     setLoading(true);
     try {
-      const email = `${mobile}@duebook.app`;
-      const { data, error } = await supabase.auth.verifyOtp({
-        email,
-        token: otp,
-        type: 'email',
+      const response = await supabase.functions.invoke('verify-otp', {
+        body: { mobile, otp, countryCode },
       });
 
-      if (error) throw error;
-
-      if (data.user) {
-        // Check if user has profile
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', data.user.id)
-          .maybeSingle();
-
-        if (!profile) {
-          // Check if this mobile exists as a customer (auto-registered by seller)
-          const { data: existingCustomer } = await supabase
-            .from('customers')
-            .select('id, name')
-            .eq('mobile', mobile)
-            .maybeSingle();
-
-          if (existingCustomer) {
-            // Auto-register as customer
-            await createProfile(data.user.id, existingCustomer.name, 'customer');
-          } else {
-            setStep('register');
-            return;
-          }
-        }
+      if (response.error) {
+        throw new Error(response.error.message || 'Verification failed');
       }
-    } catch (error: any) {
+
+      if (response.data?.error) {
+        throw new Error(response.data.error);
+      }
+
+      const { userId, hasProfile, isExistingCustomer, customerName: existingName, email } = response.data;
+      
+      // Sign in with magic link token
+      const { error: signInError } = await supabase.auth.signInWithOtp({
+        email,
+        options: { shouldCreateUser: false },
+      });
+
+      // If user has profile, auth state change will redirect
+      if (hasProfile) {
+        toast({ title: 'Welcome back!' });
+        return;
+      }
+
+      // If existing customer, auto-register
+      if (isExistingCustomer && existingName) {
+        setVerifiedUserId(userId);
+        setCustomerName(existingName);
+        await createProfile(userId, existingName, 'customer');
+        return;
+      }
+
+      // New user - show registration
+      setVerifiedUserId(userId);
+      setStep('register');
+    } catch (error: unknown) {
       console.error('Verify Error:', error);
+      const message = error instanceof Error ? error.message : 'Verification failed';
       toast({ 
         title: 'Verification failed', 
-        description: error.message,
+        description: message,
         variant: 'destructive' 
       });
     } finally {
@@ -160,11 +159,12 @@ export default function Auth() {
       } else {
         navigate('/customer/dashboard', { replace: true });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Profile Error:', error);
+      const message = error instanceof Error ? error.message : 'Failed to create profile';
       toast({ 
         title: 'Failed to create profile', 
-        description: error.message,
+        description: message,
         variant: 'destructive' 
       });
     }
@@ -179,15 +179,20 @@ export default function Auth() {
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await createProfile(user.id, fullName, selectedRole);
+      if (verifiedUserId) {
+        await createProfile(verifiedUserId, fullName, selectedRole);
+      } else {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await createProfile(user.id, fullName, selectedRole);
+        }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Register Error:', error);
+      const message = error instanceof Error ? error.message : 'Registration failed';
       toast({ 
         title: 'Registration failed', 
-        description: error.message,
+        description: message,
         variant: 'destructive' 
       });
     } finally {
@@ -232,14 +237,26 @@ export default function Auth() {
                 <form onSubmit={handleSendOTP} className="space-y-6">
                   <div className="space-y-2">
                     <Label htmlFor="mobile" className="text-sm font-medium">Mobile Number</Label>
-                    <Input
-                      id="mobile"
-                      type="tel"
-                      placeholder="Enter 10-digit mobile number"
-                      value={mobile}
-                      onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                      className="text-lg"
-                    />
+                    <div className="flex gap-2">
+                      <select
+                        value={countryCode}
+                        onChange={(e) => setCountryCode(e.target.value)}
+                        className="flex h-12 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <option value="+91">🇮🇳 +91</option>
+                        <option value="+1">🇺🇸 +1</option>
+                        <option value="+44">🇬🇧 +44</option>
+                        <option value="+971">🇦🇪 +971</option>
+                      </select>
+                      <Input
+                        id="mobile"
+                        type="tel"
+                        placeholder="Enter mobile number"
+                        value={mobile}
+                        onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                        className="text-lg flex-1"
+                      />
+                    </div>
                   </div>
 
                   <Button type="submit" className="w-full" disabled={loading || mobile.length < 10}>
@@ -261,7 +278,7 @@ export default function Auth() {
                   <h1 className="text-2xl font-bold text-foreground mb-2">Verify OTP</h1>
                   <p className="text-muted-foreground">
                     Enter the 6-digit code sent to<br />
-                    <span className="font-medium text-foreground">{mobile}</span>
+                    <span className="font-medium text-foreground">{countryCode}{mobile}</span>
                   </p>
                 </div>
 
@@ -276,13 +293,23 @@ export default function Auth() {
                     )}
                   </Button>
 
-                  <button
-                    type="button"
-                    onClick={() => { setStep('phone'); setOtp(''); }}
-                    className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    Change mobile number
-                  </button>
+                  <div className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSendOTP}
+                      disabled={loading}
+                      className="text-sm text-primary hover:underline transition-colors disabled:opacity-50"
+                    >
+                      Resend OTP
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setStep('phone'); setOtp(''); }}
+                      className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Change mobile number
+                    </button>
+                  </div>
                 </form>
               </>
             )}
