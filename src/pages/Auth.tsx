@@ -137,19 +137,17 @@ export default function Auth() {
 
   const createProfile = async (userId: string, name: string, role: AppRole) => {
     try {
-      // Create profile
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({ id: userId, mobile, full_name: name });
+      const response = await supabase.functions.invoke('create-profile', {
+        body: { userId, mobile, fullName: name, role },
+      });
 
-      if (profileError) throw profileError;
+      if (response.error) {
+        throw new Error(response.error.message || 'Failed to create profile');
+      }
 
-      // Create role
-      const { error: roleError } = await supabase
-        .from('user_roles')
-        .insert({ user_id: userId, role });
-
-      if (roleError) throw roleError;
+      if (response.data?.error) {
+        throw new Error(response.data.error);
+      }
 
       toast({ title: 'Account created successfully!' });
       
@@ -163,7 +161,7 @@ export default function Auth() {
       console.error('Profile Error:', error);
       const message = error instanceof Error ? error.message : 'Failed to create profile';
       toast({ 
-        title: 'Failed to create profile', 
+        title: 'Failed to complete registration', 
         description: message,
         variant: 'destructive' 
       });
