@@ -1,12 +1,10 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-// Simple in-memory OTP store (in production, use a database)
-const otpStore = new Map<string, { otp: string; expiresAt: number }>();
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -31,11 +29,33 @@ serve(async (req: Request): Promise<Response> => {
     const fullNumber = `${countryCode}${mobile}`;
     const otp = generateOTP();
     
-    // Store OTP with 5-minute expiry
-    otpStore.set(fullNumber, {
-      otp,
-      expiresAt: Date.now() + 5 * 60 * 1000,
+    // Store OTP in database
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
     });
+
+    // Delete any existing OTPs for this number
+    await supabaseAdmin
+      .from("otp_verifications")
+      .delete()
+      .eq("mobile", fullNumber);
+
+    // Insert new OTP with 5-minute expiry
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    const { error: insertError } = await supabaseAdmin
+      .from("otp_verifications")
+      .insert({ mobile: fullNumber, otp, expires_at: expiresAt });
+
+    if (insertError) {
+      console.error("Error storing OTP:", insertError);
+      return new Response(
+        JSON.stringify({ error: "Failed to generate OTP" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // Send SMS via Twilio
     const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
@@ -90,6 +110,3 @@ serve(async (req: Request): Promise<Response> => {
     );
   }
 });
-
-// Export for verify function to access
-export { otpStore };
