@@ -114,6 +114,13 @@ serve(async (req: Request): Promise<Response> => {
       .eq("id", user.id)
       .maybeSingle();
 
+    // Check if user has role
+    const { data: userRole } = await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
     // Check if mobile exists as customer
     const { data: existingCustomer } = await supabaseAdmin
       .from("customers")
@@ -121,11 +128,34 @@ serve(async (req: Request): Promise<Response> => {
       .eq("mobile", mobile)
       .maybeSingle();
 
+    // If existing customer without profile, auto-create profile and role
+    if (!profile && existingCustomer) {
+      await supabaseAdmin
+        .from("profiles")
+        .insert({ id: user.id, mobile, full_name: existingCustomer.name });
+      
+      await supabaseAdmin
+        .from("user_roles")
+        .insert({ user_id: user.id, role: 'customer' });
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          userId: user.id,
+          hasProfile: true,
+          role: 'customer',
+          email,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
         userId: user.id,
         hasProfile: !!profile,
+        role: userRole?.role || null,
         isExistingCustomer: !!existingCustomer,
         customerName: existingCustomer?.name,
         email,
