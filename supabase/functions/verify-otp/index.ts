@@ -22,6 +22,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const fullNumber = `${countryCode}${mobile}`;
+    console.log(`Verifying OTP for ${fullNumber}, received OTP: ${otp}`);
     
     // Verify OTP from database
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -50,6 +51,15 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     if (!otpData) {
+      console.log(`No OTP found for ${fullNumber}`);
+      // Check if any OTP exists for debugging
+      const { data: allOtps } = await supabaseAdmin
+        .from("otp_verifications")
+        .select("mobile, created_at, expires_at")
+        .order("created_at", { ascending: false })
+        .limit(5);
+      console.log("Recent OTPs in DB:", JSON.stringify(allOtps));
+      
       return new Response(
         JSON.stringify({ error: "OTP not found. Please request a new one." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
