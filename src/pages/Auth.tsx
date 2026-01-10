@@ -90,8 +90,8 @@ export default function Auth() {
 
       if (error) throw error;
 
-      if (data.user) {
-        // Create profile and role
+      if (data.user && data.session) {
+        // User is signed in, create profile and role
         const { error: profileError } = await supabase
           .from('profiles')
           .insert({ 
@@ -102,6 +102,7 @@ export default function Auth() {
 
         if (profileError) {
           console.error('Profile Error:', profileError);
+          throw new Error('Failed to create profile: ' + profileError.message);
         }
 
         const { error: roleError } = await supabase
@@ -113,9 +114,23 @@ export default function Auth() {
 
         if (roleError) {
           console.error('Role Error:', roleError);
+          throw new Error('Failed to create user role: ' + roleError.message);
         }
 
         toast({ title: 'Account created successfully!' });
+        
+        // Navigate based on role
+        if (selectedRole === 'seller') {
+          navigate('/seller/dashboard', { replace: true });
+        } else {
+          navigate('/customer/dashboard', { replace: true });
+        }
+      } else if (data.user && !data.session) {
+        // Email confirmation required (shouldn't happen with auto-confirm)
+        toast({ 
+          title: 'Please check your email', 
+          description: 'Click the confirmation link to complete signup' 
+        });
       }
     } catch (error: unknown) {
       console.error('Signup Error:', error);
