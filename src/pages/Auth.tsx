@@ -1,25 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Phone, ArrowRight, Loader2, Store, User, Shield } from 'lucide-react';
+import { Mail, ArrowRight, Loader2, Store, User, Shield, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { OTPInput } from '@/components/auth/OTPInput';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { AppRole } from '@/types/database';
 
-type AuthStep = 'phone' | 'otp' | 'register';
+type AuthMode = 'login' | 'signup';
 
 export default function Auth() {
-  const [step, setStep] = useState<AuthStep>('phone');
-  const [mobile, setMobile] = useState('');
-  const [otp, setOtp] = useState('');
+  const [mode, setMode] = useState<AuthMode>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [selectedRole, setSelectedRole] = useState<AppRole>('seller');
   const [loading, setLoading] = useState(false);
-  const [isNewUser, setIsNewUser] = useState(false);
   
   const { user, role, loading: authLoading } = useAuth();
   const navigate = useNavigate();
@@ -35,45 +33,29 @@ export default function Auth() {
     }
   }, [user, role, authLoading, navigate]);
 
-  const handleSendOTP = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!mobile || mobile.length < 10) {
-      toast({ title: 'Please enter a valid mobile number', variant: 'destructive' });
+    if (!email || !password) {
+      toast({ title: 'Please enter email and password', variant: 'destructive' });
       return;
     }
 
     setLoading(true);
     try {
-      // Check if user exists
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('mobile', mobile)
-        .maybeSingle();
-
-      setIsNewUser(!existingProfile);
-
-      // For demo purposes, we'll use email-based auth with mobile as email
-      const email = `${mobile}@duebook.app`;
-      const { error } = await supabase.auth.signInWithOtp({
+      const { error } = await supabase.auth.signInWithPassword({
         email,
-        options: {
-          emailRedirectTo: `${window.location.origin}/`,
-        },
+        password,
       });
 
       if (error) throw error;
 
+      toast({ title: 'Welcome back!' });
+    } catch (error: unknown) {
+      console.error('Login Error:', error);
+      const message = error instanceof Error ? error.message : 'Login failed';
       toast({ 
-        title: 'OTP Sent!', 
-        description: 'Check your email for the verification code (demo mode)' 
-      });
-      setStep('otp');
-    } catch (error: any) {
-      console.error('OTP Error:', error);
-      toast({ 
-        title: 'Failed to send OTP', 
-        description: error.message,
+        title: 'Login failed', 
+        description: message,
         variant: 'destructive' 
       });
     } finally {
@@ -81,113 +63,81 @@ export default function Auth() {
     }
   };
 
-  const handleVerifyOTP = async (e: React.FormEvent) => {
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (otp.length !== 6) {
-      toast({ title: 'Please enter a valid 6-digit OTP', variant: 'destructive' });
+    if (!email || !password || !fullName.trim()) {
+      toast({ title: 'Please fill in all fields', variant: 'destructive' });
+      return;
+    }
+
+    if (password.length < 6) {
+      toast({ title: 'Password must be at least 6 characters', variant: 'destructive' });
       return;
     }
 
     setLoading(true);
     try {
-      const email = `${mobile}@duebook.app`;
-      const { data, error } = await supabase.auth.verifyOtp({
+      const { data, error } = await supabase.auth.signUp({
         email,
-        token: otp,
-        type: 'email',
-      });
-
-      if (error) throw error;
-
-      if (data.user) {
-        // Check if user has profile
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', data.user.id)
-          .maybeSingle();
-
-        if (!profile) {
-          // Check if this mobile exists as a customer (auto-registered by seller)
-          const { data: existingCustomer } = await supabase
-            .from('customers')
-            .select('id, name')
-            .eq('mobile', mobile)
-            .maybeSingle();
-
-          if (existingCustomer) {
-            // Auto-register as customer
-            await createProfile(data.user.id, existingCustomer.name, 'customer');
-          } else {
-            setStep('register');
-            return;
+        password,
+        options: {
+          emailRedirectTo: window.location.origin,
+          data: {
+            full_name: fullName,
           }
         }
-      }
-    } catch (error: any) {
-      console.error('Verify Error:', error);
-      toast({ 
-        title: 'Verification failed', 
-        description: error.message,
-        variant: 'destructive' 
       });
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const createProfile = async (userId: string, name: string, role: AppRole) => {
-    try {
-      // Create profile
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({ id: userId, mobile, full_name: name });
+      if (error) throw error;
 
-      if (profileError) throw profileError;
+      if (data.user && data.session) {
+        // User is signed in, create profile and role
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({ 
+            id: data.user.id, 
+            mobile: '', 
+            full_name: fullName 
+          });
 
-      // Create role
-      const { error: roleError } = await supabase
-        .from('user_roles')
-        .insert({ user_id: userId, role });
+        if (profileError) {
+          console.error('Profile Error:', profileError);
+          throw new Error('Failed to create profile: ' + profileError.message);
+        }
 
-      if (roleError) throw roleError;
+        const { error: roleError } = await supabase
+          .from('user_roles')
+          .insert({ 
+            user_id: data.user.id, 
+            role: selectedRole 
+          });
 
-      toast({ title: 'Account created successfully!' });
-      
-      // Redirect based on role
-      if (role === 'seller') {
-        navigate('/seller/dashboard', { replace: true });
-      } else {
-        navigate('/customer/dashboard', { replace: true });
+        if (roleError) {
+          console.error('Role Error:', roleError);
+          throw new Error('Failed to create user role: ' + roleError.message);
+        }
+
+        toast({ title: 'Account created successfully!' });
+        
+        // Navigate based on role
+        if (selectedRole === 'seller') {
+          navigate('/seller/dashboard', { replace: true });
+        } else {
+          navigate('/customer/dashboard', { replace: true });
+        }
+      } else if (data.user && !data.session) {
+        // Email confirmation required (shouldn't happen with auto-confirm)
+        toast({ 
+          title: 'Please check your email', 
+          description: 'Click the confirmation link to complete signup' 
+        });
       }
-    } catch (error: any) {
-      console.error('Profile Error:', error);
+    } catch (error: unknown) {
+      console.error('Signup Error:', error);
+      const message = error instanceof Error ? error.message : 'Signup failed';
       toast({ 
-        title: 'Failed to create profile', 
-        description: error.message,
-        variant: 'destructive' 
-      });
-    }
-  };
-
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!fullName.trim()) {
-      toast({ title: 'Please enter your name', variant: 'destructive' });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await createProfile(user.id, fullName, selectedRole);
-      }
-    } catch (error: any) {
-      console.error('Register Error:', error);
-      toast({ 
-        title: 'Registration failed', 
-        description: error.message,
+        title: 'Signup failed', 
+        description: message,
         variant: 'destructive' 
       });
     } finally {
@@ -219,144 +169,136 @@ export default function Auth() {
       <main className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-md animate-slide-up">
           <div className="bg-card rounded-2xl shadow-elevated p-6 sm:p-8">
-            {step === 'phone' && (
-              <>
-                <div className="text-center mb-8">
-                  <div className="mx-auto h-16 w-16 rounded-full bg-accent flex items-center justify-center mb-4">
-                    <Phone className="h-8 w-8 text-primary" />
-                  </div>
-                  <h1 className="text-2xl font-bold text-foreground mb-2">Welcome to DueBook</h1>
-                  <p className="text-muted-foreground">Enter your mobile number to continue</p>
+            <div className="text-center mb-8">
+              <div className="mx-auto h-16 w-16 rounded-full bg-accent flex items-center justify-center mb-4">
+                <Mail className="h-8 w-8 text-primary" />
+              </div>
+              <h1 className="text-2xl font-bold text-foreground mb-2">
+                {mode === 'login' ? 'Welcome Back' : 'Create Account'}
+              </h1>
+              <p className="text-muted-foreground">
+                {mode === 'login' ? 'Sign in to your account' : 'Sign up to get started'}
+              </p>
+            </div>
+
+            <form onSubmit={mode === 'login' ? handleLogin : handleSignup} className="space-y-4">
+              {mode === 'signup' && (
+                <div className="space-y-2">
+                  <Label htmlFor="name" className="text-sm font-medium">Full Name</Label>
+                  <Input
+                    id="name"
+                    type="text"
+                    placeholder="Enter your full name"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="h-12"
+                  />
                 </div>
+              )}
 
-                <form onSubmit={handleSendOTP} className="space-y-6">
-                  <div className="space-y-2">
-                    <Label htmlFor="mobile" className="text-sm font-medium">Mobile Number</Label>
-                    <Input
-                      id="mobile"
-                      type="tel"
-                      placeholder="Enter 10-digit mobile number"
-                      value={mobile}
-                      onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                      className="text-lg"
-                    />
-                  </div>
-
-                  <Button type="submit" className="w-full" disabled={loading || mobile.length < 10}>
-                    {loading ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : (
-                      <>
-                        Continue <ArrowRight className="h-5 w-5" />
-                      </>
-                    )}
-                  </Button>
-                </form>
-              </>
-            )}
-
-            {step === 'otp' && (
-              <>
-                <div className="text-center mb-8">
-                  <h1 className="text-2xl font-bold text-foreground mb-2">Verify OTP</h1>
-                  <p className="text-muted-foreground">
-                    Enter the 6-digit code sent to<br />
-                    <span className="font-medium text-foreground">{mobile}</span>
-                  </p>
+              <div className="space-y-2">
+                <Label htmlFor="email" className="text-sm font-medium">Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="Enter your email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="h-12 pl-10"
+                  />
                 </div>
+              </div>
 
-                <form onSubmit={handleVerifyOTP} className="space-y-6">
-                  <OTPInput value={otp} onChange={setOtp} disabled={loading} />
-
-                  <Button type="submit" className="w-full" disabled={loading || otp.length !== 6}>
-                    {loading ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : (
-                      'Verify & Continue'
-                    )}
-                  </Button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setStep('phone'); setOtp(''); }}
-                    className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    Change mobile number
-                  </button>
-                </form>
-              </>
-            )}
-
-            {step === 'register' && (
-              <>
-                <div className="text-center mb-8">
-                  <h1 className="text-2xl font-bold text-foreground mb-2">Complete Registration</h1>
-                  <p className="text-muted-foreground">Tell us a bit about yourself</p>
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-sm font-medium">Password</Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="Enter your password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="h-12 pl-10"
+                  />
                 </div>
+              </div>
 
-                <form onSubmit={handleRegister} className="space-y-6">
-                  <div className="space-y-2">
-                    <Label htmlFor="name" className="text-sm font-medium">Full Name</Label>
-                    <Input
-                      id="name"
-                      type="text"
-                      placeholder="Enter your full name"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                    />
+              {mode === 'signup' && (
+                <div className="space-y-3">
+                  <Label className="text-sm font-medium">I am a</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRole('seller')}
+                      className={`p-4 rounded-xl border-2 transition-all ${
+                        selectedRole === 'seller'
+                          ? 'border-primary bg-accent'
+                          : 'border-border hover:border-muted-foreground'
+                      }`}
+                    >
+                      <Store className={`h-8 w-8 mx-auto mb-2 ${
+                        selectedRole === 'seller' ? 'text-primary' : 'text-muted-foreground'
+                      }`} />
+                      <p className={`font-medium text-sm ${
+                        selectedRole === 'seller' ? 'text-foreground' : 'text-muted-foreground'
+                      }`}>Shop Owner</p>
+                      <p className="text-xs text-muted-foreground mt-1">Manage dues & customers</p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRole('customer')}
+                      className={`p-4 rounded-xl border-2 transition-all ${
+                        selectedRole === 'customer'
+                          ? 'border-primary bg-accent'
+                          : 'border-border hover:border-muted-foreground'
+                      }`}
+                    >
+                      <User className={`h-8 w-8 mx-auto mb-2 ${
+                        selectedRole === 'customer' ? 'text-primary' : 'text-muted-foreground'
+                      }`} />
+                      <p className={`font-medium text-sm ${
+                        selectedRole === 'customer' ? 'text-foreground' : 'text-muted-foreground'
+                      }`}>Customer</p>
+                      <p className="text-xs text-muted-foreground mt-1">View my dues</p>
+                    </button>
                   </div>
+                </div>
+              )}
 
-                  <div className="space-y-3">
-                    <Label className="text-sm font-medium">I am a</Label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedRole('seller')}
-                        className={`p-4 rounded-xl border-2 transition-all ${
-                          selectedRole === 'seller'
-                            ? 'border-primary bg-accent'
-                            : 'border-border hover:border-muted-foreground'
-                        }`}
-                      >
-                        <Store className={`h-8 w-8 mx-auto mb-2 ${
-                          selectedRole === 'seller' ? 'text-primary' : 'text-muted-foreground'
-                        }`} />
-                        <p className={`font-medium text-sm ${
-                          selectedRole === 'seller' ? 'text-foreground' : 'text-muted-foreground'
-                        }`}>Shop Owner</p>
-                        <p className="text-xs text-muted-foreground mt-1">Manage dues & customers</p>
-                      </button>
+              <Button 
+                type="submit" 
+                className="w-full h-12 mt-6" 
+                disabled={loading || !email || !password || (mode === 'signup' && !fullName.trim())}
+              >
+                {loading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <>
+                    {mode === 'login' ? 'Sign In' : 'Create Account'}
+                    <ArrowRight className="h-5 w-5 ml-2" />
+                  </>
+                )}
+              </Button>
+            </form>
 
-                      <button
-                        type="button"
-                        onClick={() => setSelectedRole('customer')}
-                        className={`p-4 rounded-xl border-2 transition-all ${
-                          selectedRole === 'customer'
-                            ? 'border-primary bg-accent'
-                            : 'border-border hover:border-muted-foreground'
-                        }`}
-                      >
-                        <User className={`h-8 w-8 mx-auto mb-2 ${
-                          selectedRole === 'customer' ? 'text-primary' : 'text-muted-foreground'
-                        }`} />
-                        <p className={`font-medium text-sm ${
-                          selectedRole === 'customer' ? 'text-foreground' : 'text-muted-foreground'
-                        }`}>Customer</p>
-                        <p className="text-xs text-muted-foreground mt-1">View my dues</p>
-                      </button>
-                    </div>
-                  </div>
-
-                  <Button type="submit" className="w-full" disabled={loading || !fullName.trim()}>
-                    {loading ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : (
-                      'Complete Registration'
-                    )}
-                  </Button>
-                </form>
-              </>
-            )}
+            <div className="mt-6 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode(mode === 'login' ? 'signup' : 'login');
+                  setPassword('');
+                }}
+                className="text-sm text-primary hover:underline transition-colors"
+              >
+                {mode === 'login' 
+                  ? "Don't have an account? Sign up" 
+                  : 'Already have an account? Sign in'}
+              </button>
+            </div>
           </div>
 
           <p className="text-center text-sm text-muted-foreground mt-6">

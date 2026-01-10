@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Phone, Loader2, FileText, CheckCircle, Clock } from 'lucide-react';
+import { ArrowLeft, Plus, Phone, Loader2, FileText, CheckCircle, Clock, CreditCard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { StatCard } from '@/components/seller/StatCard';
@@ -147,10 +147,28 @@ export default function CustomerDetails() {
 
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-semibold text-foreground">Dues</h3>
-        <Button size="sm" onClick={() => setShowAddDue(true)}>
-          <Plus className="h-4 w-4" />
-          Add Due
-        </Button>
+        <div className="flex gap-2">
+          {dues.filter(d => d.status !== 'paid').length > 0 && (
+            <Button 
+              size="sm" 
+              variant="outline"
+              onClick={() => {
+                const pendingDue = dues.find(d => d.status !== 'paid');
+                if (pendingDue) {
+                  setSelectedDue(pendingDue);
+                  setShowPayment(true);
+                }
+              }}
+            >
+              <CreditCard className="h-4 w-4" />
+              Add Payment
+            </Button>
+          )}
+          <Button size="sm" onClick={() => setShowAddDue(true)}>
+            <Plus className="h-4 w-4" />
+            Add Due
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-3">
