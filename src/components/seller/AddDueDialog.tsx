@@ -24,10 +24,17 @@ interface AddDueDialogProps {
 export function AddDueDialog({ open, onOpenChange, customerId, onSuccess }: AddDueDialogProps) {
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
-  const [dueDate, setDueDate] = useState('');
+  const [dueDate, setDueDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(false);
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // Reset form with current date when dialog opens
+  React.useEffect(() => {
+    if (open) {
+      setDueDate(new Date().toISOString().split('T')[0]);
+    }
+  }, [open]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
