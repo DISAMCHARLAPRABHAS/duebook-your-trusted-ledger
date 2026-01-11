@@ -88,6 +88,33 @@ export type Database = {
           },
         ]
       }
+      otp_attempts: {
+        Row: {
+          attempts: number | null
+          created_at: string | null
+          id: string
+          last_attempt: string | null
+          locked_until: string | null
+          mobile: string
+        }
+        Insert: {
+          attempts?: number | null
+          created_at?: string | null
+          id?: string
+          last_attempt?: string | null
+          locked_until?: string | null
+          mobile: string
+        }
+        Update: {
+          attempts?: number | null
+          created_at?: string | null
+          id?: string
+          last_attempt?: string | null
+          locked_until?: string | null
+          mobile?: string
+        }
+        Relationships: []
+      }
       otp_verifications: {
         Row: {
           created_at: string
@@ -201,6 +228,7 @@ export type Database = {
     }
     Functions: {
       cleanup_expired_otps: { Args: never; Returns: undefined }
+      cleanup_old_otp_attempts: { Args: never; Returns: undefined }
       get_user_mobile: { Args: { _user_id: string }; Returns: string }
       get_user_role: {
         Args: { _user_id: string }
