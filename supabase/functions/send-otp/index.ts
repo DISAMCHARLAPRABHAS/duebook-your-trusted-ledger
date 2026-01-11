@@ -7,7 +7,10 @@ const corsHeaders = {
 };
 
 function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  // Use cryptographically secure random number generation
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return (array[0] % 900000 + 100000).toString();
 }
 
 serve(async (req: Request): Promise<Response> => {
