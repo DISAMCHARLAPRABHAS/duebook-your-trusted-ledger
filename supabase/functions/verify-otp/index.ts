@@ -6,6 +6,9 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
+
 serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -21,16 +24,78 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
+    // Validate input format
+    if (typeof mobile !== 'string' || mobile.length < 10 || mobile.length > 15 || !/^\d+$/.test(mobile)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid mobile number format" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (typeof otp !== 'string' || otp.length !== 6 || !/^\d+$/.test(otp)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid OTP format" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const fullNumber = `${countryCode}${mobile}`;
-    console.log(`Verifying OTP for ${fullNumber}, received OTP: ${otp}`);
+    console.log(`Verifying OTP for ${fullNumber}`);
     
-    // Verify OTP from database
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { autoRefreshToken: false, persistSession: false }
     });
+
+    // Check rate limiting - get attempt record
+    const { data: attemptRecord, error: attemptError } = await supabaseAdmin
+      .from("otp_attempts")
+      .select("*")
+      .eq("mobile", fullNumber)
+      .maybeSingle();
+
+    if (attemptError) {
+      console.error("Error checking attempts:", attemptError);
+    }
+
+    // Check if account is locked
+    if (attemptRecord?.locked_until) {
+      const lockExpiry = new Date(attemptRecord.locked_until);
+      if (new Date() < lockExpiry) {
+        const remainingMinutes = Math.ceil((lockExpiry.getTime() - Date.now()) / 60000);
+        return new Response(
+          JSON.stringify({ 
+            error: `Too many failed attempts. Please try again in ${remainingMinutes} minute(s).` 
+          }),
+          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } else {
+        // Lock expired, reset attempts
+        await supabaseAdmin
+          .from("otp_attempts")
+          .update({ attempts: 0, locked_until: null, last_attempt: new Date().toISOString() })
+          .eq("mobile", fullNumber);
+      }
+    }
+
+    // Check if max attempts reached
+    if (attemptRecord && attemptRecord.attempts >= MAX_ATTEMPTS) {
+      // Lock the account
+      const lockUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000).toISOString();
+      await supabaseAdmin
+        .from("otp_attempts")
+        .update({ locked_until: lockUntil })
+        .eq("mobile", fullNumber);
+      
+      return new Response(
+        JSON.stringify({ 
+          error: `Too many failed attempts. Please try again in ${LOCKOUT_MINUTES} minutes.` 
+        }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // Get the latest OTP for this number
     const { data: otpData, error: fetchError } = await supabaseAdmin
@@ -52,14 +117,6 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!otpData) {
       console.log(`No OTP found for ${fullNumber}`);
-      // Check if any OTP exists for debugging
-      const { data: allOtps } = await supabaseAdmin
-        .from("otp_verifications")
-        .select("mobile, created_at, expires_at")
-        .order("created_at", { ascending: false })
-        .limit(5);
-      console.log("Recent OTPs in DB:", JSON.stringify(allOtps));
-      
       return new Response(
         JSON.stringify({ error: "OTP not found. Please request a new one." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -79,18 +136,37 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
+    // Verify OTP - increment attempt counter BEFORE checking
     if (otpData.otp !== otp) {
+      // Increment failed attempts
+      await supabaseAdmin
+        .from("otp_attempts")
+        .upsert({ 
+          mobile: fullNumber, 
+          attempts: (attemptRecord?.attempts || 0) + 1,
+          last_attempt: new Date().toISOString()
+        }, { onConflict: "mobile" });
+
+      const remainingAttempts = MAX_ATTEMPTS - (attemptRecord?.attempts || 0) - 1;
       return new Response(
-        JSON.stringify({ error: "Invalid OTP" }),
+        JSON.stringify({ 
+          error: `Invalid OTP. ${remainingAttempts > 0 ? `${remainingAttempts} attempt(s) remaining.` : 'Account will be locked.'}` 
+        }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Mark OTP as verified and delete it
-    await supabaseAdmin
-      .from("otp_verifications")
-      .delete()
-      .eq("id", otpData.id);
+    // OTP verified successfully - clear attempt record and delete OTP
+    await Promise.all([
+      supabaseAdmin
+        .from("otp_verifications")
+        .delete()
+        .eq("id", otpData.id),
+      supabaseAdmin
+        .from("otp_attempts")
+        .delete()
+        .eq("mobile", fullNumber)
+    ]);
 
     // Generate email from mobile for Supabase auth
     const email = `${mobile}@duebook.app`;
