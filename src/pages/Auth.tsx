@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, ArrowRight, Loader2, Store, User, Shield, Lock } from 'lucide-react';
+import { Mail, ArrowRight, Loader2, Store, User, Shield, Lock, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,6 +16,7 @@ export default function Auth() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [mobile, setMobile] = useState('');
   const [selectedRole, setSelectedRole] = useState<AppRole>('seller');
   const [loading, setLoading] = useState(false);
   
@@ -65,13 +66,20 @@ export default function Auth() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password || !fullName.trim()) {
+    if (!email || !password || !fullName.trim() || !mobile.trim()) {
       toast({ title: 'Please fill in all fields', variant: 'destructive' });
       return;
     }
 
     if (password.length < 6) {
       toast({ title: 'Password must be at least 6 characters', variant: 'destructive' });
+      return;
+    }
+
+    // Validate mobile number (basic validation - 10 digits)
+    const cleanMobile = mobile.replace(/\D/g, '');
+    if (cleanMobile.length < 10) {
+      toast({ title: 'Please enter a valid mobile number', variant: 'destructive' });
       return;
     }
 
@@ -84,11 +92,24 @@ export default function Auth() {
           emailRedirectTo: window.location.origin,
           data: {
             full_name: fullName,
+            mobile: cleanMobile,
           }
         }
       });
 
-      if (error) throw error;
+      if (error) {
+        // Handle "User already registered" specifically
+        if (error.message.includes('already registered')) {
+          toast({ 
+            title: 'Account already exists', 
+            description: 'Please sign in instead',
+            variant: 'destructive' 
+          });
+          setMode('login');
+          return;
+        }
+        throw error;
+      }
 
       if (data.user && data.session) {
         // User is signed in, create profile and role
@@ -96,13 +117,16 @@ export default function Auth() {
           .from('profiles')
           .insert({ 
             id: data.user.id, 
-            mobile: '', 
+            mobile: cleanMobile, 
             full_name: fullName 
           });
 
         if (profileError) {
           console.error('Profile Error:', profileError);
-          throw new Error('Failed to create profile: ' + profileError.message);
+          // If profile already exists, continue anyway
+          if (!profileError.message.includes('duplicate key')) {
+            throw new Error('Failed to create profile: ' + profileError.message);
+          }
         }
 
         const { error: roleError } = await supabase
@@ -114,7 +138,10 @@ export default function Auth() {
 
         if (roleError) {
           console.error('Role Error:', roleError);
-          throw new Error('Failed to create user role: ' + roleError.message);
+          // If role already exists, continue anyway
+          if (!roleError.message.includes('duplicate key')) {
+            throw new Error('Failed to create user role: ' + roleError.message);
+          }
         }
 
         toast({ title: 'Account created successfully!' });
@@ -183,17 +210,38 @@ export default function Auth() {
 
             <form onSubmit={mode === 'login' ? handleLogin : handleSignup} className="space-y-4">
               {mode === 'signup' && (
-                <div className="space-y-2">
-                  <Label htmlFor="name" className="text-sm font-medium">Full Name</Label>
-                  <Input
-                    id="name"
-                    type="text"
-                    placeholder="Enter your full name"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    className="h-12"
-                  />
-                </div>
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="name" className="text-sm font-medium">Full Name</Label>
+                    <Input
+                      id="name"
+                      type="text"
+                      placeholder="Enter your full name"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="h-12"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="mobile" className="text-sm font-medium">Mobile Number</Label>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+                      <Input
+                        id="mobile"
+                        type="tel"
+                        placeholder="Enter your mobile number"
+                        value={mobile}
+                        onChange={(e) => setMobile(e.target.value)}
+                        className="h-12 pl-10"
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedRole === 'customer' 
+                        ? 'Use the same number your shop owner uses to track your dues'
+                        : 'Your customers will use their mobile to view dues you add'}
+                    </p>
+                  </div>
+                </>
               )}
 
               <div className="space-y-2">
@@ -272,7 +320,7 @@ export default function Auth() {
               <Button 
                 type="submit" 
                 className="w-full h-12 mt-6" 
-                disabled={loading || !email || !password || (mode === 'signup' && !fullName.trim())}
+                disabled={loading || !email || !password || (mode === 'signup' && (!fullName.trim() || !mobile.trim()))}
               >
                 {loading ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -291,6 +339,8 @@ export default function Auth() {
                 onClick={() => {
                   setMode(mode === 'login' ? 'signup' : 'login');
                   setPassword('');
+                  setMobile('');
+                  setFullName('');
                 }}
                 className="text-sm text-primary hover:underline transition-colors"
               >
