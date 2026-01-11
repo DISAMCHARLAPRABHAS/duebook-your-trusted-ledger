@@ -93,6 +93,7 @@ export default function Auth() {
           data: {
             full_name: fullName,
             mobile: cleanMobile,
+            role: selectedRole,
           }
         }
       });
@@ -112,38 +113,7 @@ export default function Auth() {
       }
 
       if (data.user && data.session) {
-        // User is signed in, create profile and role
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({ 
-            id: data.user.id, 
-            mobile: cleanMobile, 
-            full_name: fullName 
-          });
-
-        if (profileError) {
-          console.error('Profile Error:', profileError);
-          // If profile already exists, continue anyway
-          if (!profileError.message.includes('duplicate key')) {
-            throw new Error('Failed to create profile: ' + profileError.message);
-          }
-        }
-
-        const { error: roleError } = await supabase
-          .from('user_roles')
-          .insert({ 
-            user_id: data.user.id, 
-            role: selectedRole 
-          });
-
-        if (roleError) {
-          console.error('Role Error:', roleError);
-          // If role already exists, continue anyway
-          if (!roleError.message.includes('duplicate key')) {
-            throw new Error('Failed to create user role: ' + roleError.message);
-          }
-        }
-
+        // Profile and role are created automatically by database trigger
         toast({ title: 'Account created successfully!' });
         
         // Navigate based on role
