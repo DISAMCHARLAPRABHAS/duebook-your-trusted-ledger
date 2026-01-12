@@ -54,43 +54,39 @@ export default function CustomerDashboard() {
     }
   };
 
-  const fetchDues = async (mobile: string) => {
+  const fetchDues = async () => {
     try {
       setLoading(true);
 
-      const { data: customerRecords, error: customerError } = await supabase
-        .from('customers')
-        .select('id, seller_id, name')
-        .eq('mobile', mobile);
+      // Fetch dues directly - RLS policy allows customers to view their dues via mobile match
+      const { data: duesData, error: duesError } = await supabase
+        .from('dues')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-      if (customerError) throw customerError;
+      if (duesError) throw duesError;
 
-      if (!customerRecords || customerRecords.length === 0) {
+      if (!duesData || duesData.length === 0) {
         setDues([]);
         setSellerBreakdown([]);
         setLoading(false);
         return;
       }
 
-      const customerIds = customerRecords.map(c => c.id);
-      const sellerIds = customerRecords.map(c => c.seller_id);
+      // Get unique seller IDs from dues
+      const sellerIds = [...new Set(duesData.map(d => d.seller_id))];
 
-      const { data: duesData, error: duesError } = await supabase
-        .from('dues')
-        .select('*')
-        .in('customer_id', customerIds)
-        .order('created_at', { ascending: false });
-
-      if (duesError) throw duesError;
-
+      // Fetch seller profiles for display names
       const { data: sellerProfiles, error: sellerError } = await supabase
         .from('profiles')
         .select('id, full_name')
         .in('id', sellerIds);
 
-      if (sellerError) throw sellerError;
+      if (sellerError) {
+        console.error('Error fetching seller profiles:', sellerError);
+      }
 
-      const duesWithSeller: DueWithSeller[] = (duesData || []).map(due => {
+      const duesWithSeller: DueWithSeller[] = duesData.map(due => {
         const seller = sellerProfiles?.find(s => s.id === due.seller_id);
         return {
           ...due,
@@ -102,6 +98,7 @@ export default function CustomerDashboard() {
 
       setDues(duesWithSeller);
 
+      // Build seller breakdown
       const breakdown: SellerInfo[] = sellerIds.map(sellerId => {
         const seller = sellerProfiles?.find(s => s.id === sellerId);
         const sellerDues = duesWithSeller.filter(d => d.seller_id === sellerId);
