@@ -34,25 +34,9 @@ export default function CustomerDashboard() {
 
   useEffect(() => {
     if (user && role === 'customer') {
-      fetchUserMobile();
+      fetchDues();
     }
   }, [user, role]);
-
-  const fetchUserMobile = async () => {
-    try {
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('mobile')
-        .eq('id', user?.id)
-        .single();
-
-      if (error) throw error;
-      fetchDues(profile.mobile);
-    } catch (error) {
-      console.error('Error fetching profile:', error);
-      setLoading(false);
-    }
-  };
 
   const fetchDues = async () => {
     try {
