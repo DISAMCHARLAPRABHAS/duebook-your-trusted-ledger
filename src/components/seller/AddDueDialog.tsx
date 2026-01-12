@@ -47,6 +47,13 @@ export function AddDueDialog({ open, onOpenChange, customerId, onSuccess }: AddD
 
     setLoading(true);
     try {
+      // Get seller's name for notification
+      const { data: sellerProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user?.id)
+        .single();
+
       const { error } = await supabase.from('dues').insert({
         customer_id: customerId,
         seller_id: user?.id,
@@ -56,6 +63,23 @@ export function AddDueDialog({ open, onOpenChange, customerId, onSuccess }: AddD
       });
 
       if (error) throw error;
+
+      // Send SMS notification to customer (don't await - fire and forget)
+      supabase.functions.invoke('send-due-notification', {
+        body: {
+          customerId,
+          amount: amountNum,
+          description: description.trim(),
+          sellerName: sellerProfile?.full_name || 'Your seller',
+          dueDate: dueDate || undefined,
+        },
+      }).then((result) => {
+        if (result.error) {
+          console.error('Notification error:', result.error);
+        } else {
+          console.log('Notification sent:', result.data);
+        }
+      });
 
       toast({ title: 'Due added successfully!' });
       setDescription('');
